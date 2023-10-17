@@ -1,18 +1,9 @@
 const express = require('express')
-import { Server } from 'socket.io'
 const http = require('http')
+const { Server } = require('socket.io')
 
 const app = express();
 const server = http.createServer(app);
-
-type Draw = {
-    color: string
-    currentPoint: Point
-    prevPoint: Point | null
-    currentStroke: number
-}
-
-type Point = { x: number; y: number }
 
 
 const io = new Server(server, {
@@ -22,7 +13,7 @@ const io = new Server(server, {
 })
 
 io.on('connection', (socket) => {
-    socket.on('draw-line', ({ prevPoint, currentPoint, color, currentStroke }: Draw) => {
+    socket.on('draw-line', ({ prevPoint, currentPoint, color, currentStroke }) => {
         socket.broadcast.emit('draw-line', { prevPoint, currentPoint, color, currentStroke })
     })
     socket.on('clear', () => {
@@ -33,8 +24,8 @@ io.on('connection', (socket) => {
     })
 
     socket.on('canvas-state', (canvasRef) => {
-        socket.broadcast.emit('canvas-state-from-server',  canvasRef)
-    });  
+        socket.broadcast.emit('canvas-state-from-server', canvasRef)
+    });
 
 
 })

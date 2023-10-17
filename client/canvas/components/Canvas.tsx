@@ -6,7 +6,7 @@ import React, { useEffect, useState } from 'react';
 import { SketchPicker } from 'react-color';
 import { io } from 'socket.io-client';
 
-const socket = io('http://localhost:4000');
+const socket = io('https://web-canvas.onrender.com');
 
 const Canvas = () => {
   const [color, setColor] = useState('#000');
