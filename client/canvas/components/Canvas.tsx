@@ -5,6 +5,7 @@ import { drawLineInit } from '@/utils/utils';
 import React, { useEffect, useState } from 'react';
 import { SketchPicker } from 'react-color';
 import { io } from 'socket.io-client';
+import isEven from 'is-even';
 
 const socket = io('https://web-canvas.onrender.com');
 
@@ -12,6 +13,8 @@ const Canvas = () => {
   const [color, setColor] = useState('#000');
   const [isDesktop, setIsDesktop] = useState<boolean>(true);
   const [currentStroke, setCurrentStroke] = useState(5);
+  
+  console.log(isEven(2));
 
   const createLine = (data: Draw) => {
     const { prevPoint, currentPoint } = data;
