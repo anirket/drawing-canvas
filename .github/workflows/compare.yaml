@@ -235,4 +235,5 @@ jobs:
         with:
           name: bundle-analysis-reports
           path: client/canvas/.next/analyze-result
+
           retention-days: 14
