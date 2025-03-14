@@ -4,7 +4,7 @@ on:
   pull_request:
     types: [opened, synchronize, reopened]
     paths:
-      - 'client/**'  # Only run on changes to client folder
+      - 'client/canvas/**'  # Only run on changes to client folder
 
 jobs:
   analyze:
@@ -24,17 +24,17 @@ jobs:
         with:
           node-version: '18'
           cache: 'npm'
-          cache-dependency-path: 'client/package-lock.json'  # Specify the lock file path
+          cache-dependency-path: 'client/canvas/package-lock.json'  # Specify the lock file path
           
       - name: Install dependencies in client directory
         run: |
-          cd client
+          cd client/canvas
           npm ci
         
       - name: Build and analyze current PR
         run: |
           # Navigate to client directory
-          cd client
+          cd client/canvas
           
           # Add bundle analyzer plugin
           npm install --save-dev @next/bundle-analyzer
@@ -70,7 +70,7 @@ jobs:
           git checkout ${{ github.base_ref }}
           
           # Navigate to client directory
-          cd client
+          cd client/canvas
           
           # Clear previous build
           rm -rf .next
@@ -95,7 +95,7 @@ jobs:
           git checkout ${{ github.event.pull_request.head.sha }}
           
           # Navigate to client directory
-          cd client
+          cd client/canvas
           
           # Generate comparison script
           cat > compare-sizes.js << 'EOL'
@@ -191,7 +191,7 @@ jobs:
         with:
           comment-id: ${{ steps.find-comment.outputs.comment-id }}
           issue-number: ${{ github.event.pull_request.number }}
-          body-file: client/.next/analyze-result/comparison.md
+          body-file: client/canvas/.next/analyze-result/comparison.md
           body-path: false
           edit-mode: replace
           
@@ -199,5 +199,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: bundle-analysis-reports
-          path: client/.next/analyze-result
+          path: client/canvas/.next/analyze-result
           retention-days: 14
