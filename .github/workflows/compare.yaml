@@ -78,4 +78,126 @@ jobs:
           # Install dependencies for base branch
           npm ci
           
-          #
+          # Build with bundle analyzer 
+          NEXT_CONFIG_FILE=analyze-bundle.js NODE_ENV=production npm run build
+          
+          # Save base branch bundle stats
+          mkdir -p .next/analyze-result/base
+          find .next/analyze -name "*.html" -exec cp {} .next/analyze-result/base/ \;
+          find .next/analyze -name "*.json" -exec cp {} .next/analyze-result/base/ \;
+          
+          # Extract page sizes for comparison
+          find .next/static/chunks/pages -name "*.js" | sort | xargs stat -c "%s %n" > .next/analyze-result/base-sizes.txt
+      
+      - name: Generate comparison report
+        run: |
+          # Checkout back to PR branch
+          git checkout ${{ github.event.pull_request.head.sha }}
+          
+          # Navigate to client directory
+          cd client
+          
+          # Generate comparison script
+          cat > compare-sizes.js << 'EOL'
+          const fs = require('fs');
+          
+          // Read size files
+          const baseContent = fs.readFileSync('.next/analyze-result/base-sizes.txt', 'utf8');
+          const prContent = fs.readFileSync('.next/analyze-result/pr-sizes.txt', 'utf8');
+          
+          // Parse sizes
+          const parseLines = content => {
+            return content.split('\n')
+              .filter(line => line.trim())
+              .map(line => {
+                const [size, path] = line.trim().split(' ');
+                const pageName = path.split('/pages/')[1];
+                return { size: parseInt(size), path, pageName };
+              });
+          };
+          
+          const baseFiles = parseLines(baseContent);
+          const prFiles = parseLines(prContent);
+          
+          // Create a map for easy lookup
+          const baseMap = {};
+          baseFiles.forEach(file => {
+            baseMap[file.pageName] = file.size;
+          });
+          
+          // Generate comparison data
+          const results = [];
+          prFiles.forEach(file => {
+            const baseSize = baseMap[file.pageName] || 0;
+            const change = file.size - baseSize;
+            const percentChange = baseSize ? ((change / baseSize) * 100).toFixed(2) : 'N/A';
+            
+            results.push({
+              page: file.pageName,
+              currentSize: file.size,
+              baseSize,
+              change,
+              percentChange: percentChange !== 'N/A' ? `${percentChange}%` : percentChange
+            });
+          });
+          
+          // Generate markdown table
+          let markdownTable = '## Next.js Bundle Size Analysis\n\n';
+          markdownTable += '| Page | Current Size | Base Size | Change | % Change |\n';
+          markdownTable += '| ---- | ------------ | --------- | ------ | -------- |\n';
+          
+          results.forEach(result => {
+            const formattedCurrentSize = `${(result.currentSize / 1024).toFixed(2)} KB`;
+            const formattedBaseSize = `${(result.baseSize / 1024).toFixed(2)} KB`;
+            const formattedChange = `${(result.change / 1024).toFixed(2)} KB`;
+            const changeIcon = result.change > 0 ? '🔴' : result.change < 0 ? '🟢' : '⚪';
+            
+            markdownTable += `| ${result.page} | ${formattedCurrentSize} | ${formattedBaseSize} | ${changeIcon} ${formattedChange} | ${result.percentChange} |\n`;
+          });
+          
+          // Calculate overall bundle size changes
+          const totalBaseSize = baseFiles.reduce((sum, file) => sum + file.size, 0);
+          const totalPrSize = prFiles.reduce((sum, file) => sum + file.size, 0);
+          const totalChange = totalPrSize - totalBaseSize;
+          const totalPercentChange = ((totalChange / totalBaseSize) * 100).toFixed(2);
+          
+          const overallSummary = `\n### Overall Change\n` +
+            `Total bundle size: ${(totalPrSize / 1024 / 1024).toFixed(2)} MB ` +
+            `(${totalChange > 0 ? '+' : ''}${(totalChange / 1024).toFixed(2)} KB, ${totalChange > 0 ? '+' : ''}${totalPercentChange}%)\n`;
+          
+          // Write to file
+          fs.writeFileSync('.next/analyze-result/comparison.md', markdownTable + overallSummary);
+          
+          // Generate HTML bundle report links
+          const bundleReportLinks = '\n### Bundle Analysis Reports\n' +
+            'Bundle reports have been uploaded as artifacts. Download them from the Actions tab.\n';
+          
+          fs.appendFileSync('.next/analyze-result/comparison.md', bundleReportLinks);
+          EOL
+          
+          # Run comparison script
+          node compare-sizes.js
+      
+      - name: Find Comment
+        uses: peter-evans/find-comment@v2
+        id: find-comment
+        with:
+          issue-number: ${{ github.event.pull_request.number }}
+          comment-author: 'github-actions[bot]'
+          body-includes: 'Next.js Bundle Size Analysis'
+      
+      - name: Create or update comment
+        uses: peter-evans/create-or-update-comment@v2
+        with:
+          comment-id: ${{ steps.find-comment.outputs.comment-id }}
+          issue-number: ${{ github.event.pull_request.number }}
+          body-file: client/.next/analyze-result/comparison.md
+          body-path: false
+          edit-mode: replace
+          
+      - name: Upload bundle analysis artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: bundle-analysis-reports
+          path: client/.next/analyze-result
+          retention-days: 14
