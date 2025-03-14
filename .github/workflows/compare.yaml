@@ -1,0 +1,239 @@
+name: Next.js Canvas Bundle Size Analysis
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - 'client/canvas/**'  # Only run on changes to client/canvas folder
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Checkout base branch for comparison
+        run: git fetch origin ${{ github.base_ref }}:${{ github.base_ref }}
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+          cache-dependency-path: 'client/canvas/package-lock.json'
+          
+      - name: Install dependencies in client/canvas directory
+        run: |
+          cd client/canvas
+          npm ci
+        
+      - name: Build and analyze current PR
+        run: |
+          # Navigate to client/canvas directory
+          cd client/canvas
+          
+          # Add bundle analyzer plugin
+          npm install --save-dev @next/bundle-analyzer
+          
+          # Create bundle analyzer config
+          cat > analyze-bundle.js << 'EOL'
+          const withBundleAnalyzer = require('@next/bundle-analyzer')({
+            enabled: true,
+            openAnalyzer: false,
+          });
+          
+          const nextConfig = require('./next.config.js');
+          
+          module.exports = withBundleAnalyzer(
+            typeof nextConfig === 'function' ? nextConfig : nextConfig
+          );
+          EOL
+          
+          # Create results directory
+          mkdir -p .next/analyze-result/pr
+          
+          # Build with bundle analyzer
+          ANALYZE=true NEXT_CONFIG_FILE=analyze-bundle.js NODE_ENV=production npm run build
+          
+          # Check where bundle analyzer output is located
+          find .next -name "*.html" | grep -i bundle || echo "No bundle HTML files found"
+          
+          # Try to find the bundle stats in possible locations and save them
+          if [ -d ".next/analyze" ]; then
+            find .next/analyze -name "*.html" -exec cp {} .next/analyze-result/pr/ \;
+            find .next/analyze -name "*.json" -exec cp {} .next/analyze-result/pr/ \;
+          elif [ -d ".next/bundle-analyzer" ]; then
+            find .next/bundle-analyzer -name "*.html" -exec cp {} .next/analyze-result/pr/ \;
+            find .next/bundle-analyzer -name "*.json" -exec cp {} .next/analyze-result/pr/ \;
+          else
+            # Search for any bundle analysis files
+            find .next -name "*bundle*.html" -exec cp {} .next/analyze-result/pr/ \;
+            find .next -name "*stats*.json" -exec cp {} .next/analyze-result/pr/ \;
+          fi
+          
+          # Extract page sizes for comparison
+          find .next/static/chunks/pages -name "*.js" | sort | xargs stat -c "%s %n" > .next/analyze-result/pr-sizes.txt
+      
+      - name: Build and analyze base branch
+        run: |
+          # Checkout base branch
+          git checkout ${{ github.base_ref }}
+          
+          # Navigate to client/canvas directory
+          cd client/canvas
+          
+          # Clear previous build
+          rm -rf .next
+          
+          # Install dependencies for base branch
+          npm ci
+          
+          # Create results directory
+          mkdir -p .next/analyze-result/base
+          
+          # Build with bundle analyzer 
+          ANALYZE=true NEXT_CONFIG_FILE=analyze-bundle.js NODE_ENV=production npm run build
+          
+          # Try to find the bundle stats in possible locations and save them
+          if [ -d ".next/analyze" ]; then
+            find .next/analyze -name "*.html" -exec cp {} .next/analyze-result/base/ \;
+            find .next/analyze -name "*.json" -exec cp {} .next/analyze-result/base/ \;
+          elif [ -d ".next/bundle-analyzer" ]; then
+            find .next/bundle-analyzer -name "*.html" -exec cp {} .next/analyze-result/base/ \;
+            find .next/bundle-analyzer -name "*.json" -exec cp {} .next/analyze-result/base/ \;
+          else
+            # Search for any bundle analysis files
+            find .next -name "*bundle*.html" -exec cp {} .next/analyze-result/base/ \;
+            find .next -name "*stats*.json" -exec cp {} .next/analyze-result/base/ \;
+          fi
+          
+          # Extract page sizes for comparison
+          find .next/static/chunks/pages -name "*.js" | sort | xargs stat -c "%s %n" > .next/analyze-result/base-sizes.txt
+      
+      - name: Generate comparison report
+        run: |
+          # Checkout back to PR branch
+          git checkout ${{ github.event.pull_request.head.sha }}
+          
+          # Navigate to client/canvas directory
+          cd client/canvas
+          
+          # Generate comparison script
+          cat > compare-sizes.js << 'EOL'
+          const fs = require('fs');
+          
+          // Read size files
+          const baseContent = fs.existsSync('.next/analyze-result/base-sizes.txt') 
+            ? fs.readFileSync('.next/analyze-result/base-sizes.txt', 'utf8')
+            : '';
+          const prContent = fs.existsSync('.next/analyze-result/pr-sizes.txt')
+            ? fs.readFileSync('.next/analyze-result/pr-sizes.txt', 'utf8')
+            : '';
+          
+          // Parse sizes
+          const parseLines = content => {
+            if (!content) return [];
+            return content.split('\n')
+              .filter(line => line.trim())
+              .map(line => {
+                const [size, path] = line.trim().split(' ');
+                const pageName = path.includes('/pages/') ? path.split('/pages/')[1] : path;
+                return { size: parseInt(size), path, pageName };
+              });
+          };
+          
+          const baseFiles = parseLines(baseContent);
+          const prFiles = parseLines(prContent);
+          
+          // Create a map for easy lookup
+          const baseMap = {};
+          baseFiles.forEach(file => {
+            baseMap[file.pageName] = file.size;
+          });
+          
+          // Generate comparison data
+          const results = [];
+          prFiles.forEach(file => {
+            const baseSize = baseMap[file.pageName] || 0;
+            const change = file.size - baseSize;
+            const percentChange = baseSize ? ((change / baseSize) * 100).toFixed(2) : 'N/A';
+            
+            results.push({
+              page: file.pageName,
+              currentSize: file.size,
+              baseSize,
+              change,
+              percentChange: percentChange !== 'N/A' ? `${percentChange}%` : percentChange
+            });
+          });
+          
+          // Generate markdown table
+          let markdownTable = '## Next.js Canvas Bundle Size Analysis\n\n';
+          
+          if (results.length === 0) {
+            markdownTable += '⚠️ No bundle size data was found. Please check the build logs for more details.\n\n';
+          } else {
+            markdownTable += '| Page | Current Size | Base Size | Change | % Change |\n';
+            markdownTable += '| ---- | ------------ | --------- | ------ | -------- |\n';
+            
+            results.forEach(result => {
+              const formattedCurrentSize = `${(result.currentSize / 1024).toFixed(2)} KB`;
+              const formattedBaseSize = `${(result.baseSize / 1024).toFixed(2)} KB`;
+              const formattedChange = `${(result.change / 1024).toFixed(2)} KB`;
+              const changeIcon = result.change > 0 ? '🔴' : result.change < 0 ? '🟢' : '⚪';
+              
+              markdownTable += `| ${result.page} | ${formattedCurrentSize} | ${formattedBaseSize} | ${changeIcon} ${formattedChange} | ${result.percentChange} |\n`;
+            });
+            
+            // Calculate overall bundle size changes
+            const totalBaseSize = baseFiles.reduce((sum, file) => sum + file.size, 0);
+            const totalPrSize = prFiles.reduce((sum, file) => sum + file.size, 0);
+            const totalChange = totalPrSize - totalBaseSize;
+            const totalPercentChange = totalBaseSize ? ((totalChange / totalBaseSize) * 100).toFixed(2) : 'N/A';
+            
+            markdownTable += `\n### Overall Change\n` +
+              `Total bundle size: ${(totalPrSize / 1024 / 1024).toFixed(2)} MB ` +
+              `(${totalChange > 0 ? '+' : ''}${(totalChange / 1024).toFixed(2)} KB, ${totalChange > 0 ? '+' : ''}${totalPercentChange}%)\n`;
+          }
+          
+          // Write to file
+          fs.writeFileSync('.next/analyze-result/comparison.md', markdownTable);
+          
+          // Add bundle analyzer info
+          const bundleReportLinks = '\n### Bundle Analysis Reports\n' +
+            'Bundle reports have been uploaded as artifacts. Download them from the Actions tab.\n';
+          
+          fs.appendFileSync('.next/analyze-result/comparison.md', bundleReportLinks);
+          EOL
+          
+          # Run comparison script
+          node compare-sizes.js
+      
+      - name: Find Comment
+        uses: peter-evans/find-comment@v3
+        id: find-comment
+        with:
+          issue-number: ${{ github.event.pull_request.number }}
+          comment-author: 'github-actions[bot]'
+          body-includes: 'Next.js Canvas Bundle Size Analysis'
+      
+      - name: Create or update comment
+        uses: peter-evans/create-or-update-comment@v3
+        with:
+          comment-id: ${{ steps.find-comment.outputs.comment-id }}
+          issue-number: ${{ github.event.pull_request.number }}
+          body-file: client/canvas/.next/analyze-result/comparison.md
+          body-path: false
+          edit-mode: replace
+          
+      - name: Upload bundle analysis artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: bundle-analysis-reports
+          path: client/canvas/.next/analyze-result
+          retention-days: 14
+          
