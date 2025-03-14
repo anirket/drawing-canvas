@@ -17,6 +17,7 @@
     "socket.io-client": "4.7.2"
   },
   "devDependencies": {
+    "@types/is-even": "1.0.2",
     "@types/node": "^20",
     "@types/react": "^18",
     "@types/react-color": "3.0.7",
